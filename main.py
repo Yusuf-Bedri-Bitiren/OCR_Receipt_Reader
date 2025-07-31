@@ -8,6 +8,7 @@ import time, functools
 from processImage import *
 from postProcess import *
 
+
 print(">>> Kod başladı <<<")
 
 # Tesseract konumu
@@ -30,7 +31,7 @@ def extract_text_from_image(image, config_psm = 6):  # Takes a PIL Image directl
     return text
 
 # Asıl işlem akışı main yerine burada, test sistemi çalışsın diye
-def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_process = False, psm_values = [11, 4, 6, 3], isReceipt = False):
+def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_process = False, psm_values = [11, 4, 6, 3], isReceipt = False, fatura_no_candidates=None):
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(current_dir, "models", "autocrop_model_v2.pth") #TODO bu kısım run() a alınabilir
@@ -46,7 +47,18 @@ def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_proce
         cropped_img = preprocess_for_ocr(cropped_img)   # Yeni: OCR öncesi preprocess et
 
     psm_results = []                                    # Muhtemelen yüksek kalite fotoğraflar için fazlasına gerek yok
-    component_results = []                              # dict listesi listesi
+    component_results = []     
+    
+    if not isReceipt and fatura_no_candidates is not None:
+        try:
+            from extractFaturaNo import extract_fatura_no_from_region_dynamic
+            dynamic_fatura_no = extract_fatura_no_from_region_dynamic(cropped_img)
+            print(f"[DEBUG] Dinamik Fatura No Çalıştı (Crop: {crop}, PreProcess: {pre_process}): {dynamic_fatura_no}")
+            if dynamic_fatura_no:
+                fatura_no_candidates.append(dynamic_fatura_no)
+        except Exception as e:
+            if test_active:
+                print(f"[HATA] Fatura No dinamik çıkarılamadı: {e}")
 
     if test_active:
         output_folder = os.path.join(current_dir, "ocr_outputs")     # Folder where results will be saved    
@@ -74,28 +86,29 @@ def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_proce
 def run(image_path, test=False):
     all_results = []  
     all_components = []
+    fatura_no_candidates = []
 
     isReceipt = is_receipt(extract_text_from_image(image_path, 3)) | is_receipt(extract_text_from_image(image_path, 6)) | is_receipt(extract_text_from_image(image_path, 4)) | is_receipt(extract_text_from_image(image_path, 11))
     if test: print(f"This is a receipt: {isReceipt}")
 
 
-    psm_results_1, component_results_1 = run_receipt_pipeline(image_path, test, False, False, isReceipt= isReceipt)  # Uncropped, unprocessed
+    psm_results_1, component_results_1 = run_receipt_pipeline(image_path, test, False, False, isReceipt= isReceipt, fatura_no_candidates=fatura_no_candidates)  # Uncropped, unprocessed
     all_results.extend(psm_results_1)
     if isReceipt: all_components.extend(component_results_1)
 
-    psm_results_2, component_results_2 = run_receipt_pipeline(image_path, test, False, True, isReceipt= isReceipt)   # Uncropped, processed
+    psm_results_2, component_results_2 = run_receipt_pipeline(image_path, test, False, True, isReceipt= isReceipt, fatura_no_candidates=fatura_no_candidates)   # Uncropped, processed
     all_results.extend(psm_results_2)
     if isReceipt: all_components.extend(component_results_2)
 
-    psm_results_3, component_results_3 = run_receipt_pipeline(image_path, test, True, False, isReceipt= isReceipt)   # Cropped, unprocessed
+    psm_results_3, component_results_3 = run_receipt_pipeline(image_path, test, True, False, isReceipt= isReceipt, fatura_no_candidates=fatura_no_candidates)   # Cropped, unprocessed
     all_results.extend(psm_results_3)
     if isReceipt: all_components.extend(component_results_3) 
 
-    psm_results_4, component_results_4 = run_receipt_pipeline(image_path, test, True, True, isReceipt= isReceipt)    # Cropped, processed (skip if bad)
+    psm_results_4, component_results_4 = run_receipt_pipeline(image_path, test, True, True, isReceipt= isReceipt, fatura_no_candidates=fatura_no_candidates)    # Cropped, processed (skip if bad)
     all_results.extend(psm_results_4)
     if isReceipt: all_components.extend(component_results_4)
     
-    final_results = merge_field_results(all_results)
+    final_results = merge_field_results(all_results, extra_fatura_candidates=fatura_no_candidates)
 
     if isReceipt: must_exist = ["Tarih", "Fiş No", "Toplam", "Belge Türü"]
     if not isReceipt: must_exist = ["Tarih", "Fatura No", "Toplam", "Belge Türü", "KDV Oranı"]
@@ -111,6 +124,9 @@ def run(image_path, test=False):
         final_results["Alt Kalemler"] = find_most_common_components_by_sum(all_components)
         if final_results["Alt Kalemler"]:
             final_results["Toplam"] = round(sum(i["Harcama Tutarı"] for i in final_results["Alt Kalemler"]), 2)
+
+    if test:
+        print(f"\nDynamic Fatura No Candidates: {fatura_no_candidates}")
 
     if test:
         print("\nGrouped results by field:\n")
@@ -153,7 +169,7 @@ def run(image_path, test=False):
 
     
 if __name__ == "__main__":
-    image_path = "Karel/receipts/S24.jpg"    
+    image_path = "receipts/S35.jpg"    
 
     start_time = time.time()         
 

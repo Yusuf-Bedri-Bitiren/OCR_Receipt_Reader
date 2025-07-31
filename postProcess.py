@@ -76,7 +76,7 @@ def fix_date_ocr_errors(date_str: str) -> str: #   Fix common OCR year errors as
 
 #     return final_fields
 
-def merge_field_results(results):  # Düzgün çalışan baştan 4 silmeli versiyon
+def merge_field_results(results, extra_fatura_candidates=None):  # Düzgün çalışan baştan 4 silmeli versiyon
     field_values = defaultdict(list)
 
     for fields in results:
@@ -111,7 +111,12 @@ def merge_field_results(results):  # Düzgün çalışan baştan 4 silmeli versi
 
         if not override_applied:
             final_fields[key] = most_common_val
-
+            
+    if extra_fatura_candidates:
+        counter = Counter(extra_fatura_candidates)
+        most_common, freq = counter.most_common(1)[0]
+        final_fields["Fatura No"] = most_common
+    
     return final_fields
 
 def extract_fields(text, isReceipt = True):
@@ -168,16 +173,21 @@ def extract_fields(text, isReceipt = True):
     }
 
     bill_fields = {}
+    # bill_fatura_no = re.search(
+    #     r"(?:fatura\s*(?:no|nu|n[o0])|fat\s*no)[^\w\d]{0,4}[:\-]?\s*([A-ZİŞĞÜÇÖ]{1,4}[\s\-]?\d{10,16})",
+    #     text,
+    #     re.IGNORECASE
+    # )
+    # if not bill_fatura_no:
+    #     bill_fatura_no = re.search(
+    #         r"\b[İIı]?\s*([A-ZİŞĞÜÇÖ]{3}\d{13})\b",  # fallback regex
+    #         text
+    #     )
     bill_fatura_no = re.search(
-        r"(?:fatura\s*(?:no|nu|n[o0])|fat\s*no)[^\w\d]{0,4}[:\-]?\s*([A-ZİŞĞÜÇÖ]{1,4}[\s\-]?\d{10,16})",
+        r"\b[İIı]?\s*([A-ZİŞĞÜÇÖ]{3}\d{13})\b",
         text,
         re.IGNORECASE
     )
-    if not bill_fatura_no:
-        bill_fatura_no = re.search(
-            r"\b[İIı]?\s*([A-ZİŞĞÜÇÖ]{3}\d{13})\b",  # fallback regex
-            text
-        )
     if bill_fatura_no:
         bill_fields["Fatura No"] = bill_fatura_no
 
