@@ -1,0 +1,13 @@
+{
+    "Belge Türü": "Fiş",
+    "Tarih": "25.09.2024",
+    "Toplam": 391.26,
+    "Fiş No": null,
+    "Alt Kalemler": [
+        {
+            "Masraf Açıklama": "- MIS Jr SUT YAĞSIZ",
+            "KDV Oranı": 1,
+            "Harcama Tutarı": 23.5
+        }
+    ]
+}
