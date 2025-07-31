@@ -1,0 +1,9 @@
+# Core Libraries
+numpy==1.26.4
+opencv-python==4.10.0.82
+Pillow==10.2.0
+regex==2024.4.28
+torch==2.3.0
+
+# OCR Engine
+pytesseract==0.3.10
