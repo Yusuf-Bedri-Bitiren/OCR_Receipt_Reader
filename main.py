@@ -1,39 +1,48 @@
+# # Author(s): Yaman Türköz, Yusuf Bedri Bitiren
+#
+# Makbuz ve fatura görüntülerinden otomatik veri çıkarımı için OCR tabanlı iş akışı.
+#
+# Bu script şu işlemleri yapar:
+# - Görüntüyü isteğe bağlı olarak derin öğrenmeye dayalı autocrop ile kırpar.
+# - OCR öncesi görüntü ön işleme (binarizasyon, gürültü azaltma vb.) uygulanabilir (processImage modülü kullanılır).
+# - Tesseract OCR ile farklı Sayfa Segmentasyon Modu (PSM) ayarlarında metin çıkarımı yapılır.
+# - postProcess.py ile ham metin işlenir.
+# - Farklı PSM ve ön işleme kombinasyonlarından elde edilen sonuçlar birleştirilir, eksik alanlar tamamlanır.
+# - Test modu ile detaylı ara çıktı dosyaları oluşturulur.
+# - Sonuçlar JSON formatında kaydedilir.
+
 from autocrop_kh import autocrop
 from PIL import Image
 import pytesseract
 import torch
 import os
 import json
-import time, functools
 from processImage import *
 from postProcess import *
 
 print(">>> Kod başladı <<<")
 
-# Tesseract konumu
+# Tesseract konumu (kendi Tesseract directory'nizi yazmanız gerekiyor)
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-def timed(fn):
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        result = fn(*args, **kwargs)
-        print(f"[TIMING] {fn.__name__:25s}: {time.time() - start:.3f}s")
-        return result
-    return wrapper
-
-# OCR fonksiyonu
-@timed
-def extract_text_from_image(image, config_psm = 6):  # Takes a PIL Image directly
+# PIL Image nesnesinden OCR ile metin çıkarır
+# config_psm parametresi ile Tesseract'ın Sayfa Segmentasyon Modu ayarlanabilir
+def extract_text_from_image(image, config_psm = 6):
     custom_config = f'--oem 3 --psm {config_psm} -l tur'
     text = pytesseract.image_to_string(image, config=custom_config)
     return text
 
-# Asıl işlem akışı main yerine burada, test sistemi çalışsın diye
+# Makbuz/fatura iş akışını çalıştırır:
+# - İstenirse kırpma (crop) yapılır,
+# - İstenirse OCR öncesi ön işleme yapılır,
+# - Farklı PSM modlarında OCR yapılır,
+# - Çıkarılan metin alanları regex ile analiz edilir,
+# - Alt kalemler çıkarılır (sadece makbuzlar için),
+# - Test aktifse OCR çıktıları dosyaya kaydedilir.
 def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_process = False, psm_values = [11, 4, 6, 3], isReceipt = False):
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_dir, "models", "autocrop_model_v2.pth") #TODO bu kısım run() a alınabilir
+    model_path = os.path.join(current_dir, "models", "autocrop_model_v2.pth")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if crop:                                                # 1. Kırp
@@ -45,17 +54,17 @@ def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_proce
     if pre_process:
         cropped_img = preprocess_for_ocr(cropped_img)   # Yeni: OCR öncesi preprocess et
 
-    psm_results = []                                    # Muhtemelen yüksek kalite fotoğraflar için fazlasına gerek yok
-    component_results = []                              # dict listesi listesi
+    psm_results = []                                    
+    component_results = []                             
 
-    if test_active:
-        output_folder = os.path.join(current_dir, "ocr_outputs")     # Folder where results will be saved    
+    if test_active: # Test aktif ise sonuçları kaydet
+        output_folder = os.path.join(current_dir, "ocr_outputs")      
 
-        if not os.path.exists(output_folder):    # Create the folder if it doesn't exist
+        if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
     for value in psm_values:
-        text = extract_text_from_image(cropped_img, value)      # 3. OCR işlemi (yukarıdaki psm_values ile tek tek)
+        text = extract_text_from_image(cropped_img, value)      # 3. OCR işlemi (signature'deki psm_values ile tek tek)
         psm_results.append(extract_fields(text, isReceipt))                # 4. Alanları regex ile ayıkla 
         if value != 11 and isReceipt: component_results.append(parse_items(text, test_active))       # Alt kalemleri çıkar ve ekle, 11 alt kalem için kötü
         if test_active:
@@ -64,13 +73,18 @@ def run_receipt_pipeline(image_path, test_active = False, crop = True, pre_proce
             
             with open(os.path.join(output_folder, filename), 'w', encoding='utf-8') as file:
                 file.write(text)
-
-        # if test_active:
-        #     print(f"\n[Fotoğraf işlendikten sonra OCR'dan Gelen Ham Metin (psm {value})]:\n")
-        #     print(text)
                 
     return psm_results, component_results
 
+# Verilen görüntü dosyası için tüm senaryoları çalıştırır:
+# - OCR çıktısına göre belge türünü tahmin eder (fiş veya fatura),
+# - Kırpma ve ön işleme kombinasyonlarını dener,
+# - Tüm PSM değerlerinde OCR yapar,
+# - Tüm sonuçları birleştirir,
+# - Gerekli alanlar yoksa None atar,
+# - Alt kalemleri en iyi toplam tutara göre seçer veya en sık tekrar edenleri bulur,
+# - Test modundaysa detaylı çıktı verir,
+# - Sonuçları JSON olarak results.txt'ye kaydeder.
 def run(image_path, test=False):
     all_results = []  
     all_components = []
@@ -78,7 +92,7 @@ def run(image_path, test=False):
     isReceipt = is_receipt(extract_text_from_image(image_path, 3)) | is_receipt(extract_text_from_image(image_path, 6)) | is_receipt(extract_text_from_image(image_path, 4)) | is_receipt(extract_text_from_image(image_path, 11))
     if test: print(f"This is a receipt: {isReceipt}")
 
-
+    # Dört farklı işlem senaryosunu çalıştırıp sonuçları biriktir
     psm_results_1, component_results_1 = run_receipt_pipeline(image_path, test, False, False, isReceipt= isReceipt)  # Uncropped, unprocessed
     all_results.extend(psm_results_1)
     if isReceipt: all_components.extend(component_results_1)
@@ -97,6 +111,7 @@ def run(image_path, test=False):
     
     final_results = merge_field_results(all_results)
 
+    # Gerekli alanları kontrol et, yoksa None ata
     if isReceipt: must_exist = ["Tarih", "Fiş No", "Toplam", "Belge Türü"]
     if not isReceipt: must_exist = ["Tarih", "Fatura No", "Toplam", "Belge Türü", "KDV Oranı"]
 
@@ -145,6 +160,7 @@ def run(image_path, test=False):
                     print(f"   - {name} | KDV: %{kdv} | Tutar: {amount:.2f}")
         print("\n")
 
+    # Sonuçları results.txt dosyasına JSON olarak kaydet ve döndür
     results_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results.txt")
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(final_results, f, ensure_ascii=False, indent=4)
@@ -153,25 +169,6 @@ def run(image_path, test=False):
 
     
 if __name__ == "__main__":
-    image_path = "Karel/receipts/S24.jpg"    
+    image_path = "Karel/receipts/S1.jpg"  #Fotoğraf directory'si
 
-    start_time = time.time()         
-
-    # # Tüm senaryoları deneyip seçen fonksiyon
     run(image_path, True)
-
-    # for i in range(1, 35):
-    #     filename = f"S{i}.jpg"
-    #     filepath = os.path.join("Karel/receipts", filename)
-
-    #     if not os.path.exists(filepath):
-    #         print(f"❌ Missing file: {filepath}")
-    #         continue
-
-    #     print(f"\n🧾 Testing {filename}...")
-    #     run(filepath, False)    
-
-    end_time = time.time()
-    elapsed = end_time - start_time
-
-    print(f"\n⏱️ Total processing time: {elapsed:.2f} seconds\n")
